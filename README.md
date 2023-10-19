@@ -1,0 +1,558 @@
+# Titanic-survival
+## Introduction
+In this article, we are going to go through the popular Titanic dataset and try to predict whether a person survived the shipwreck. 
+The Goal: Predict whether a passenger survived or not. 0 for not surviving, 1 for surviving.
+Describing the data
+ 
+## Data Analysis
+Step 1: Importing basic libraries
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+%matplotlib inline
+Step 2: Reading the data
+training = pd.read_csv('/kaggle/input/titanic/train.csv')
+test = pd.read_csv('/kaggle/input/titanic/test.csv')
+training['train_test'] = 1
+test['train_test'] = 0
+test['Survived'] = np.NaN
+all_data = pd.concat([training,test])
+all_data.columns
+ 
+ 
+Step 3: Data Exploration
+In this section we will try to draw insights from the Data, and get familiar with it, so we can create more efficient models.
+training.info()
+ 
+ 
+training.describe()
+ 
+ 
+# seperate the data into numeric and categorical
+df_num = training[['Age','SibSp','Parch','Fare']]
+df_cat = training[['Survived','Pclass','Sex','Ticket','Cabin','Embarked']]
+Now let’s make plots of the numeric data:
+for i in df_num.columns:
+    plt.hist(df_num[i])
+    plt.title(i)
+    plt.show()
+ 
+ 
+So as you can see, most of the distributions are scattered, except Age, it’s pretty normalized. We might consider normalizing them later on. Next, we plot a correlation heatmap between the numeric columns:
+sns.heatmap(df_num.corr())
+ 
+ 
+Here we can see that Parch and SibSp has a higher correlation, which generally makes sense since Parents are more likely to travel with their multiple kids and spouses tend to travel together. Next, let us compare survival rates across the numeric variables. This might reveal some interesting insights:
+pd.pivot_table(training, index = 'Survived', values = ['Age','SibSp','Parch','Fare'])
+ 
+ 
+The inference we can draw from this table is:
+1.	 The average age of survivors is 28, so young people tend to survive more.
+2.	 People who paid higher fare rates were more likely to survive, more than double. This might be the people traveling in first-class. Thus the rich survived, which is kind of a sad story in this scenario.
+3.	 In the 3rd column, If you have parents, you had a higher chance of surviving. So the parents might’ve saved the kids before themselves, thus explaining the rates
+4.	 And if you are a child, and have siblings, you have less of a chance of surviving
+Now we do a similar thing with our categorical variables:
+for i in df_cat.columns:
+    sns.barplot(df_cat[i].value_counts().index,df_cat[i].value_counts()).set_title(i)
+    plt.show()
+ 
+ 
+The Ticket and Cabin graphs look very messy, we might have to feature engineer them! Other than that, the rest of the graphs tells us:
+1.	Survived: Most of the people died in the shipwreck,  only around 300 people survived.
+2.	Pclass: The majority of the people traveling, had tickets to the 3rd class.
+3.	Sex: There were more males than females aboard the ship, roughly double the amount.
+4.	Embarked: Most of the passengers boarded the ship from Southampton.
+ Now we will do something similar to the pivot table above, but with our categorical variables, and compare them against our dependent variable, which is if people survived:
+print(pd.pivot_table(training, index = 'Survived', columns = 'Pclass',
+                     values = 'Ticket' ,aggfunc ='count'))
+print()
+print(pd.pivot_table(training, index = 'Survived', columns = 'Sex', 
+                     values = 'Ticket' ,aggfunc ='count'))
+print()
+print(pd.pivot_table(training, index = 'Survived', columns = 'Embarked', 
+                     values = 'Ticket' ,aggfunc ='count'))
+ 
+1.	Pclass: Here we can see a lot more people survived from the First class than the Second or the Third class, even though the total number of passengers in the First class was much much less than the Third class. Thus our previous assumption that the rich survived is confirmed here, which might be relevant to model building.
+2.	Sex: Most of the women survived, and the majority of the male died in the shipwreck. So it looks like the saying “Woman and children first” actually applied in this scenario.
+3.	Embarked: This doesn’t seem much relevant, maybe if someone was from “Cherbourg” had a higher chance of surviving.
+ 
+Step 4: Feature Engineering
+We saw that our ticket and cabin data don’t really make sense to us, and this might hinder the performance of our model, so we have to simplify some of this data with feature engineering.
+If we look at the actual cabin data, we see that there’s basically a letter and then a number. The letters might signify what type of cabin it is, where on the ship it is, which floor, which Class it is for, etc. And the numbers might signify the Cabin number. Let us first split them into individual cabins and see whether someone owned more than a single cabin.
+df_cat.Cabin
+training['cabin_multiple'] = training.Cabin.apply(lambda x: 0 if pd.isna(x) 
+                                                    else len(x.split(' ')))
+training['cabin_multiple'].value_counts()
+ 
+It looks like the vast majority did not have individual cabins, and only a few people owned more than one cabins. Now let’s see whether the survival rates depend on this:
+pd.pivot_table(training, index = 'Survived', columns = 'cabin_multiple',
+               values = 'Ticket' ,aggfunc ='count')
+ 
+Next, let us look at the actual letter of the cabin they were in. So you could expect that the cabins with the same letter are roughly in the same locations, or on the same floors, and logically if a cabin was near the lifeboats, they had a better chance of survival. Let us look into that:
+# n stands for null
+# in this case we will treat null values like it's own category
+training['cabin_adv'] = training.Cabin.apply(lambda x: str(x)[0])
+#comparing survival rates by cabin
+print(training.cabin_adv.value_counts())
+pd.pivot_table(training,index='Survived',columns='cabin_adv', 
+                        values = 'Name', aggfunc='count')
+ 
+I did some future engineering on the ticket column and it did not yield many significant insights, which we don’t already know, so I’ll be skipping that part to keep the article concise. We will just divide the tickets into numeric and non-numeric for efficient usage:
+training['numeric_ticket'] = training.Ticket.apply(lambda x: 1 if x.isnumeric() else 0)
+training['ticket_letters'] = training.Ticket.apply(lambda x: ''.join(x.split(' ')[:-1])
+                                            .replace('.','').replace('/','')
+                                            .lower() if len(x.split(' ')[:-1]) >0 else 0)
+ Another interesting thing we can look at is the title of individual passengers. And whether it played any role in them getting a seat in the lifeboats.
+training.Name.head(50)
+training['name_title'] = training.Name.apply(lambda x: x.split(',')[1]
+                                                        .split('.')[0].strip())
+training['name_title'].value_counts()
+ 
+As you can see, the ship was boarded by people of many different classes, this might be useful for us in our model.
+Step 5: Data preprocessing for model
+In this segment, we make our data, model-ready. The objectives we have to fulfill are listed below:
+1.	Drop the null values from the Embarked column
+2.	Include only relevant data
+3.	Categorically transform all of the data, using something called a transformer.
+4.	Impute data with the central tendencies for age and fare.
+5.	Normalize the fare column to have a more normal distribution.
+6.	using standard scaler scale data 0-1
+ 
+Step 6: Model Deployment
+Here we will simply deploy the various models with default parameters and see which one yields the best result. The models can further be tuned for better performance but are not in the scope of this one article. The models we will run are:
+•	Logistic regression
+•	K Nearest Neighbour
+•	Support Vector classifier
+First, we import the necessary models
+from sklearn.model_selection import cross_val_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+1) Logistic Regression
+lr = LogisticRegression(max_iter = 2000)
+cv = cross_val_score(lr,X_train_scaled,y_train,cv=5)
+print(cv)
+print(cv.mean())
+ Introduction
+In this article, we are going to go through the popular Titanic dataset and try to predict whether a person survived the shipwreck. 
+The Goal: Predict whether a passenger survived or not. 0 for not surviving, 1 for surviving.
+Describing the data
+ 
+ Image Source: Kaggle
+ 
+In this article, we will do some basic data analysis, then some feature engineering, and in the end-use some of the popular models for prediction. Let’s get started.
+ 
+Data Analysis
+Step 1: Importing basic libraries
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+%matplotlib inline
+Step 2: Reading the data
+training = pd.read_csv('/kaggle/input/titanic/train.csv')
+test = pd.read_csv('/kaggle/input/titanic/test.csv')
+training['train_test'] = 1
+test['train_test'] = 0
+test['Survived'] = np.NaN
+all_data = pd.concat([training,test])
+all_data.columns
+ 
+ 
+ 
+Step 3: Data Exploration
+In this section we will try to draw insights from the Data, and get familiar with it, so we can create more efficient models.
+training.info()
+ 
+ 
+training.describe()
+ 
+ 
+# seperate the data into numeric and categorical
+df_num = training[['Age','SibSp','Parch','Fare']]
+df_cat = training[['Survived','Pclass','Sex','Ticket','Cabin','Embarked']]
+Now let’s make plots of the numeric data:
+for i in df_num.columns:
+    plt.hist(df_num[i])
+    plt.title(i)
+    plt.show()
+ 
+ 
+So as you can see, most of the distributions are scattered, except Age, it’s pretty normalized. We might consider normalizing them later on. Next, we plot a correlation heatmap between the numeric columns:
+sns.heatmap(df_num.corr())
+ 
+ 
+Here we can see that Parch and SibSp has a higher correlation, which generally makes sense since Parents are more likely to travel with their multiple kids and spouses tend to travel together. Next, let us compare survival rates across the numeric variables. This might reveal some interesting insights:
+pd.pivot_table(training, index = 'Survived', values = ['Age','SibSp','Parch','Fare'])
+ 
+ 
+The inference we can draw from this table is:
+1.	 The average age of survivors is 28, so young people tend to survive more.
+2.	 People who paid higher fare rates were more likely to survive, more than double. This might be the people traveling in first-class. Thus the rich survived, which is kind of a sad story in this scenario.
+3.	 In the 3rd column, If you have parents, you had a higher chance of surviving. So the parents might’ve saved the kids before themselves, thus explaining the rates
+4.	 And if you are a child, and have siblings, you have less of a chance of surviving
+Now we do a similar thing with our categorical variables:
+for i in df_cat.columns:
+    sns.barplot(df_cat[i].value_counts().index,df_cat[i].value_counts()).set_title(i)
+    plt.show()
+ 
+ 
+The Ticket and Cabin graphs look very messy, we might have to feature engineer them! Other than that, the rest of the graphs tells us:
+1.	Survived: Most of the people died in the shipwreck,  only around 300 people survived.
+2.	Pclass: The majority of the people traveling, had tickets to the 3rd class.
+3.	Sex: There were more males than females aboard the ship, roughly double the amount.
+4.	Embarked: Most of the passengers boarded the ship from Southampton.
+ Now we will do something similar to the pivot table above, but with our categorical variables, and compare them against our dependent variable, which is if people survived:
+print(pd.pivot_table(training, index = 'Survived', columns = 'Pclass',
+                     values = 'Ticket' ,aggfunc ='count'))
+print()
+print(pd.pivot_table(training, index = 'Survived', columns = 'Sex', 
+                     values = 'Ticket' ,aggfunc ='count'))
+print()
+print(pd.pivot_table(training, index = 'Survived', columns = 'Embarked', 
+                     values = 'Ticket' ,aggfunc ='count'))
+ 
+1.	Pclass: Here we can see a lot more people survived from the First class than the Second or the Third class, even though the total number of passengers in the First class was much much less than the Third class. Thus our previous assumption that the rich survived is confirmed here, which might be relevant to model building.
+2.	Sex: Most of the women survived, and the majority of the male died in the shipwreck. So it looks like the saying “Woman and children first” actually applied in this scenario.
+3.	Embarked: This doesn’t seem much relevant, maybe if someone was from “Cherbourg” had a higher chance of surviving.
+ 
+Step 4: Feature Engineering
+We saw that our ticket and cabin data don’t really make sense to us, and this might hinder the performance of our model, so we have to simplify some of this data with feature engineering.
+If we look at the actual cabin data, we see that there’s basically a letter and then a number. The letters might signify what type of cabin it is, where on the ship it is, which floor, which Class it is for, etc. And the numbers might signify the Cabin number. Let us first split them into individual cabins and see whether someone owned more than a single cabin.
+df_cat.Cabin
+training['cabin_multiple'] = training.Cabin.apply(lambda x: 0 if pd.isna(x) 
+                                                    else len(x.split(' ')))
+training['cabin_multiple'].value_counts()
+ 
+It looks like the vast majority did not have individual cabins, and only a few people owned more than one cabins. Now let’s see whether the survival rates depend on this:
+pd.pivot_table(training, index = 'Survived', columns = 'cabin_multiple',
+               values = 'Ticket' ,aggfunc ='count')
+ 
+Next, let us look at the actual letter of the cabin they were in. So you could expect that the cabins with the same letter are roughly in the same locations, or on the same floors, and logically if a cabin was near the lifeboats, they had a better chance of survival. Let us look into that:
+# n stands for null
+# in this case we will treat null values like it's own category
+training['cabin_adv'] = training.Cabin.apply(lambda x: str(x)[0])
+#comparing survival rates by cabin
+print(training.cabin_adv.value_counts())
+pd.pivot_table(training,index='Survived',columns='cabin_adv', 
+                        values = 'Name', aggfunc='count')
+ 
+I did some future engineering on the ticket column and it did not yield many significant insights, which we don’t already know, so I’ll be skipping that part to keep the article concise. We will just divide the tickets into numeric and non-numeric for efficient usage:
+training['numeric_ticket'] = training.Ticket.apply(lambda x: 1 if x.isnumeric() else 0)
+training['ticket_letters'] = training.Ticket.apply(lambda x: ''.join(x.split(' ')[:-1])
+                                            .replace('.','').replace('/','')
+                                            .lower() if len(x.split(' ')[:-1]) >0 else 0)
+ Another interesting thing we can look at is the title of individual passengers. And whether it played any role in them getting a seat in the lifeboats.
+training.Name.head(50)
+training['name_title'] = training.Name.apply(lambda x: x.split(',')[1]
+                                                        .split('.')[0].strip())
+training['name_title'].value_counts()
+ 
+As you can see, the ship was boarded by people of many different classes, this might be useful for us in our model.
+Step 5: Data preprocessing for model
+In this segment, we make our data, model-ready. The objectives we have to fulfill are listed below:
+1.	Drop the null values from the Embarked column
+2.	Include only relevant data
+3.	Categorically transform all of the data, using something called a transformer.
+4.	Impute data with the central tendencies for age and fare.
+5.	Normalize the fare column to have a more normal distribution.
+6.	using standard scaler scale data 0-1
+ 
+Step 6: Model Deployment
+Here we will simply deploy the various models with default parameters and see which one yields the best result. The models can further be tuned for better performance but are not in the scope of this one article. The models we will run are:
+•	Logistic regression
+•	K Nearest Neighbour
+•	Support Vector classifier
+First, we import the necessary models
+from sklearn.model_selection import cross_val_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+1) Logistic Regression
+lr = LogisticRegression(max_iter = 2000)
+cv = cross_val_score(lr,X_train_scaled,y_train,cv=5)
+print(cv)
+print(cv.mean())
+ 
+2) K Nearest Neighbour
+knn = KNeighborsClassifier()
+cv = cross_val_score(knn,X_train_scaled,y_train,cv=5)
+print(cv)
+print(cv.mean())
+ 
+3) Support Vector Classifier
+svc = SVC(probability = True)
+cv = cross_val_score(svc,X_train_scaled,y_train,cv=5)
+print(cv)
+print(cv.mean())
+
+
+
+2) K Nearest Neighbour
+knn = KNeighborsClassifier()Introduction
+In this article, we are going to go through the popular Titanic dataset and try to predict whether a person survived the shipwreck. 
+The Goal: Predict whether a passenger survived or not. 0 for not surviving, 1 for surviving.
+Describing the data
+ 
+ Image Source: Kaggle
+ 
+In this article, we will do some basic data analysis, then some feature engineering, and in the end-use some of the popular models for prediction. Let’s get started.
+ 
+Data Analysis
+Step 1: Importing basic libraries
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+%matplotlib inline
+Step 2: Reading the data
+training = pd.read_csv('/kaggle/input/titanic/train.csv')
+test = pd.read_csv('/kaggle/input/titanic/test.csv')
+training['train_test'] = 1
+test['train_test'] = 0
+test['Survived'] = np.NaN
+all_data = pd.concat([training,test])
+all_data.columns
+ 
+ 
+ 
+Step 3: Data Exploration
+In this section we will try to draw insights from the Data, and get familiar with it, so we can create more efficient models.
+training.info()
+ 
+ 
+training.describe()
+ 
+ 
+# seperate the data into numeric and categorical
+df_num = training[['Age','SibSp','Parch','Fare']]
+df_cat = training[['Survived','Pclass','Sex','Ticket','Cabin','Embarked']]
+Now let’s make plots of the numeric data:
+for i in df_num.columns:
+    plt.hist(df_num[i])
+    plt.title(i)
+    plt.show()
+ 
+ 
+So as you can see, most of the distributions are scattered, except Age, it’s pretty normalized. We might consider normalizing them later on. Next, we plot a correlation heatmap between the numeric columns:
+sns.heatmap(df_num.corr())
+ 
+ 
+Here we can see that Parch and SibSp has a higher correlation, which generally makes sense since Parents are more likely to travel with their multiple kids and spouses tend to travel together. Next, let us compare survival rates across the numeric variables. This might reveal some interesting insights:
+pd.pivot_table(training, index = 'Survived', values = ['Age','SibSp','Parch','Fare'])
+ 
+ 
+The inference we can draw from this table is:
+1.	 The average age of survivors is 28, so young people tend to survive more.
+2.	 People who paid higher fare rates were more likely to survive, more than double. This might be the people traveling in first-class. Thus the rich survived, which is kind of a sad story in this scenario.
+3.	 In the 3rd column, If you have parents, you had a higher chance of surviving. So the parents might’ve saved the kids before themselves, thus explaining the rates
+4.	 And if you are a child, and have siblings, you have less of a chance of surviving
+Now we do a similar thing with our categorical variables:
+for i in df_cat.columns:
+    sns.barplot(df_cat[i].value_counts().index,df_cat[i].value_counts()).set_title(i)
+    plt.show()
+ 
+ 
+The Ticket and Cabin graphs look very messy, we might have to feature engineer them! Other than that, the rest of the graphs tells us:
+1.	Survived: Most of the people died in the shipwreck,  only around 300 people survived.
+2.	Pclass: The majority of the people traveling, had tickets to the 3rd class.
+3.	Sex: There were more males than females aboard the ship, roughly double the amount.
+4.	Embarked: Most of the passengers boarded the ship from Southampton.
+ Now we will do something similar to the pivot table above, but with our categorical variables, and compare them against our dependent variable, which is if people survived:
+print(pd.pivot_table(training, index = 'Survived', columns = 'Pclass',
+                     values = 'Ticket' ,aggfunc ='count'))
+print()
+print(pd.pivot_table(training, index = 'Survived', columns = 'Sex', 
+                     values = 'Ticket' ,aggfunc ='count'))
+print()
+print(pd.pivot_table(training, index = 'Survived', columns = 'Embarked', 
+                     values = 'Ticket' ,aggfunc ='count'))
+ 
+1.	Pclass: Here we can see a lot more people survived from the First class than the Second or the Third class, even though the total number of passengers in the First class was much much less than the Third class. Thus our previous assumption that the rich survived is confirmed here, which might be relevant to model building.
+2.	Sex: Most of the women survived, and the majority of the male died in the shipwreck. So it looks like the saying “Woman and children first” actually applied in this scenario.
+3.	Embarked: This doesn’t seem much relevant, maybe if someone was from “Cherbourg” had a higher chance of surviving.
+ 
+Step 4: Feature Engineering
+We saw that our ticket and cabin data don’t really make sense to us, and this might hinder the performance of our model, so we have to simplify some of this data with feature engineering.
+If we look at the actual cabin data, we see that there’s basically a letter and then a number. The letters might signify what type of cabin it is, where on the ship it is, which floor, which Class it is for, etc. And the numbers might signify the Cabin number. Let us first split them into individual cabins and see whether someone owned more than a single cabin.
+df_cat.Cabin
+training['cabin_multiple'] = training.Cabin.apply(lambda x: 0 if pd.isna(x) 
+                                                    else len(x.split(' ')))
+training['cabin_multiple'].value_counts()
+ 
+It looks like the vast majority did not have individual cabins, and only a few people owned more than one cabins. Now let’s see whether the survival rates depend on this:
+pd.pivot_table(training, index = 'Survived', columns = 'cabin_multiple',
+               values = 'Ticket' ,aggfunc ='count')
+ 
+Next, let us look at the actual letter of the cabin they were in. So you could expect that the cabins with the same letter are roughly in the same locations, or on the same floors, and logically if a cabin was near the lifeboats, they had a better chance of survival. Let us look into that:
+# n stands for null
+# in this case we will treat null values like it's own category
+training['cabin_adv'] = training.Cabin.apply(lambda x: str(x)[0])
+#comparing survival rates by cabin
+print(training.cabin_adv.value_counts())
+pd.pivot_table(training,index='Survived',columns='cabin_adv', 
+                        values = 'Name', aggfunc='count')
+ 
+I did some future engineering on the ticket column and it did not yield many significant insights, which we don’t already know, so I’ll be skipping that part to keep the article concise. We will just divide the tickets into numeric and non-numeric for efficient usage:
+training['numeric_ticket'] = training.Ticket.apply(lambda x: 1 if x.isnumeric() else 0)
+training['ticket_letters'] = training.Ticket.apply(lambda x: ''.join(x.split(' ')[:-1])
+                                            .replace('.','').replace('/','')
+                                            .lower() if len(x.split(' ')[:-1]) >0 else 0)
+ Another interesting thing we can look at is the title of individual passengers. And whether it played any role in them getting a seat in the lifeboats.
+training.Name.head(50)
+training['name_title'] = training.Name.apply(lambda x: x.split(',')[1]
+                                                        .split('.')[0].strip())
+training['name_title'].value_counts()
+ 
+As you can see, the ship was boarded by people of many different classes, this might be useful for us in our model.
+Step 5: Data preprocessing for model
+In this segment, we make our data, model-ready. The objectives we have to fulfill are listed below:
+1.	Drop the null values from the Embarked column
+2.	Include only relevant data
+3.	Categorically transform all of the data, using something called a transformer.
+4.	Impute data with the central tendencies for age and fare.
+5.	Normalize the fare column to have a more normal distribution.
+6.	using standard scaler scale data 0-1
+ 
+Step 6: Model Deployment
+Here we will simply deploy the various models with default parameters and see which one yields the best result. The models can further be tuned for better performance but are not in the scope of this one article. The models we will run are:
+•	Logistic regression
+•	K Nearest Neighbour
+•	Support Vector classifier
+First, we import the necessary models
+from sklearn.model_selection import cross_val_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+1) Logistic Regression
+lr = LogisticRegression(max_iter = 2000)
+cv = cross_val_score(lr,X_train_scaled,y_train,cv=5)
+print(cv)
+print(cv.mean())
+ 
+2) K Nearest Neighbour
+knn = KNeighborsClassifier()
+cv = cross_val_score(knn,X_train_scaled,y_train,cv=5)
+print(cv)
+print(cv.mean())
+ 
+3) Support Vector Classifier
+svc = SVC(probability = True)
+cv = cross_val_score(svc,X_train_scaled,y_train,cv=5)
+print(cv)
+print(cv.mean())
+
+
+
+cv = cross_val_score(knn,X_train_scaled,y_train,cv=5)
+print(cv)
+print(cv.mean())
+ 
+3) Support Vector Classifier
+svc = SVC(probability = True)
+cv = cross_val_score(svc,X_train_scaled,y_train,cv=5)
+print(cv)
+print(cv.mean())
+
+## Flask code
+
+from flask import Flask, render_template, request
+import pickle 
+app = Flask(__name__)
+model = pickle.load(open('titanic_model.pkl','rb')) #read mode
+@app.route("/")
+def home():
+    return render_template('index.html')
+@app.route("/predict", methods=['GET','POST'])
+def predict():
+    if request.method == 'POST':
+        #access the data from form
+        ## Age
+        Survived = int(request.form["Survived"])
+        Pclass = int(request.form["Pclass"])
+        Gender = int(request.form["Gender"])
+        Age = int(request.form["Age"])
+        SibSp = int(request.form["SibSp"])
+        Parch = int(request.form["Parch"])
+        Fare = int(request.form["Fare"])
+        Embarked = int(request.form["Embarked"])
+        #get prediction
+        input_cols = [['Survived', 'Pclass', 'Gender', 'Age', 'SibSp', 'Parch', 'Fare',
+       'Embarked']]
+        prediction = model.predict(input_cols)
+        output = round(prediction[0], 2)
+        return render_template("index.html", prediction_text='Your predicted surive is {}'.format(output))
+if __name__ == "__main__":
+    app.run(debug=True)
+
+## html code
+
+
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Titanic Survive</title>
+  <link href='https://fonts.googleapis.com/css?family=Open+Sans+Condensed:300' rel='stylesheet' type='text/css'>
+  <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
+</head>
+<body style="background: rgb(252, 250, 250);">
+  <div class="login">
+   <h1 style="text-align:center">Titanic Survive Predictor</h1>
+    <form action="{{ url_for('predict')}}" method="post">
+      <label for="Pclass" colo>Age:  </label>
+      <input type="text" name="Pclass" placeholder="Pclass" required="required">
+      <br>
+
+      <br>
+      <label for="Gender">Gender:  </label>
+      <select id="Gender" name="Gender" placeholder="Gender", required="required">
+        <option value="0">Male</option>
+        <option value="1">Female</option>
+      </select>
+      <br>
+
+      <br>
+      <label for="Age">Age:  </label>
+      <input type="Age" name="Age" placeholder="Age" required="required">
+      <br>
+
+      <br>
+      <label for="SibSp">SibSp:  </label>
+      <input type="text" name="SibSp" placeholder="SibSp" required="required">
+      <br>
+
+      <br>
+      <label for="Parch">SibSp:  </label>
+      <input type="text" name="Parch" placeholder="Parch" required="required">
+      <br>
+ 	
+      <br>
+      <label for="Fare">SibSp:  </label>
+      <input type="text" name="Fare" placeholder="Fare" required="required">
+      <br>
+
+   
+      <br>
+      <label for="Embarked">Embarked:  </label>
+      <select id="Embarked" name="Embarked", placeholder="Embarked", required="required">
+        <option value="2">S</option>
+        <option value="0">C</option>
+        <option value="1">Q</option>
+        <option value="3">nan</option>
+      </select>
+      <br>
+
+      <br>
+      <button type="submit" class="btn btn-primary btn-block btn-large">Titanic Survived</button>
+    </form>
+    <br>
+    <br>
+    <h2>
+    {{ prediction_text }}
+    </h2>
+  </div>
+</body>
+</html>
